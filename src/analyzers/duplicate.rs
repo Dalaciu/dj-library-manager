@@ -1,117 +1,210 @@
-use rayon::prelude::*;
 use crate::AudioFile;
-use std::sync::Mutex;
+use crate::utils::parallel::ParallelProcessor;
+use std::sync::atomic::Ordering;
+use regex::Regex;
+use std::sync::Arc;
 
-pub struct DuplicateAnalyzer {
-    similarity_threshold: f64,
+#[derive(Debug)]
+pub struct DuplicateMatch {
+    pub higher_quality: AudioFile,
+    pub lower_quality: AudioFile,
+    pub match_reason: String,
+    pub quality_difference: String
 }
 
 #[derive(Debug)]
-pub struct DuplicateGroup {
-    pub original: AudioFile,
-    pub duplicates: Vec<AudioFile>,
+pub struct DuplicateResults {
+    pub matches: Vec<DuplicateMatch>,
+    pub total_files_scanned: usize,
 }
 
+pub struct DuplicateAnalyzer {
+    title_regex: Arc<Regex>,
+}
+
+impl ParallelProcessor for DuplicateAnalyzer {}
+
 impl DuplicateAnalyzer {
-    pub fn new(similarity_threshold: f64) -> Self {
-        println!("Initializing DuplicateAnalyzer with threshold: {}", similarity_threshold);
-        Self { similarity_threshold }
+    pub fn new(_threshold: f64) -> Self {
+        Self::init_parallel_processing();
+        println!("Initializing DuplicateAnalyzer");
+        Self {
+            title_regex: Arc::new(Regex::new(r"^\d+\.?\s*").unwrap()),
+        }
     }
 
-    fn calculate_similarity(file1: &AudioFile, file2: &AudioFile) -> f64 {
-        println!("Comparing:\n  - {}\n  - {}", file1.file_name, file2.file_name);
-        let mut score = 0.0;
-        let mut factors = 0.0;
+    fn clean_title(&self, filename: &str) -> (String, Option<String>, Option<String>) {
+        // Remove file extension
+        let without_ext = filename.rfind('.').map_or(filename, |i| &filename[..i]);
 
-        // Compare sizes (exact match gives high score)
-        if file1.size_bytes == file2.size_bytes {
-            score += 3.0;
-            println!("  Size match ({})", file1.size_bytes);
+        // Remove track numbers in brackets or with dots
+        let without_numbers = without_ext
+            .replace(|c| c == '[' || c == ']', "")
+            .replace(|c| c == '_', " ")
+            .trim()
+            .to_string();
+
+        // Remove leading numbers and dots using pre-compiled regex
+        let without_numbers = self.title_regex.replace(&without_numbers, "").to_string();
+
+        // Split artist and title
+        let parts: Vec<&str> = without_numbers.split(" - ").collect();
+        if parts.len() < 2 {
+            return (without_numbers, None, None);
         }
-        factors += 3.0;
 
-        // Compare durations if available
-        if let (Some(d1), Some(d2)) = (file1.duration_secs, file2.duration_secs) {
-            if (d1 - d2).abs() < 1.0 { // Within 1 second
-                score += 2.0;
-                println!("  Duration match ({:.2}s)", d1);
+        let artist = parts[0].trim().to_lowercase();
+        let mut title_parts = parts[1..].join(" - ");
+
+        // Extract version info in parentheses
+        let version = if let Some(paren_start) = title_parts.rfind('(') {
+            if let Some(paren_end) = title_parts[paren_start..].find(')') {
+                let version = title_parts[paren_start + 1..paren_start + paren_end].trim().to_lowercase();
+                title_parts = title_parts[..paren_start].trim().to_string();
+                Some(version)
+            } else {
+                None
             }
-        }
-        factors += 2.0;
+        } else {
+            None
+        };
 
-        // Compare metadata
-        if let (Some(t1), Some(t2)) = (&file1.title, &file2.title) {
-            if t1 == t2 {
-                score += 2.0;
-                println!("  Title match ({})", t1);
-            }
-        }
-        if let (Some(a1), Some(a2)) = (&file1.artist, &file2.artist) {
-            if a1 == a2 {
-                score += 2.0;
-                println!("  Artist match ({})", a1);
-            }
-        }
-        factors += 4.0;
-
-        let final_score = score / factors;
-        println!("  Similarity score: {:.2}", final_score);
-        final_score
+        (artist, Some(title_parts.trim().to_lowercase()), version)
     }
 
-    pub fn find_duplicates(&self, files: Vec<AudioFile>) -> Vec<DuplicateGroup> {
-        println!("Starting duplicate analysis with {} files", files.len());
-        if files.is_empty() {
-            println!("No files to analyze!");
-            return Vec::new();
+    fn are_duplicates(&self, file1: &AudioFile, file2: &AudioFile) -> Option<DuplicateMatch> {
+        let (artist1, title1, version1) = self.clean_title(&file1.file_name);
+        let (artist2, title2, version2) = self.clean_title(&file2.file_name);
+
+        // Must have exact artist match
+        if artist1 != artist2 {
+            return None;
         }
 
-        let processed = Mutex::new(vec![false; files.len()]);
-        let groups = Mutex::new(Vec::new());
+        // Must have title portion after the dash
+        let (Some(title1), Some(title2)) = (title1, title2) else {
+            return None;
+        };
 
-        (0..files.len()).into_par_iter().for_each(|i| {
-            let mut should_process = false;
-            {
-                let mut processed = processed.lock().unwrap();
-                if !processed[i] {
-                    processed[i] = true;
-                    should_process = true;
-                }
-            }
+        // Must have exact main title match
+        if title1 != title2 {
+            return None;
+        }
 
-            if should_process {
-                let mut current_duplicates = Vec::new();
-                
-                // Compare with remaining files
-                for j in (i + 1)..files.len() {
-                    let is_unprocessed = {
-                        let processed = processed.lock().unwrap();
-                        !processed[j]
-                    };
+        // Different versions are not duplicates
+        match (version1, version2) {
+            (Some(v1), Some(v2)) if v1 != v2 => {
+                // Check for significant version differences
+                let version_keywords = [
+                    "remix", "edit", "version", "mix", "remaster", 
+                    "extended", "radio", "club", "instrumental", "dub",
+                    "original", "rework", "reconstruction", "vip", "bootleg",
+                    "mashup", "flip", "cut", "recut", "reprise"
+                ];
 
-                    if is_unprocessed {
-                        let similarity = Self::calculate_similarity(&files[i], &files[j]);
-                        if similarity >= self.similarity_threshold {
-                            println!("Found duplicate: {} -> {}", files[i].file_name, files[j].file_name);
-                            current_duplicates.push(files[j].clone());
-                            let mut processed = processed.lock().unwrap();
-                            processed[j] = true;
-                        }
+                // If either version contains any of these keywords, they're different versions
+                for keyword in version_keywords {
+                    if (v1.contains(keyword) || v2.contains(keyword)) && v1 != v2 {
+                        return None;
                     }
                 }
-
-                if !current_duplicates.is_empty() {
-                    let mut groups = groups.lock().unwrap();
-                    groups.push(DuplicateGroup {
-                        original: files[i].clone(),
-                        duplicates: current_duplicates,
-                    });
-                }
             }
+            _ => {}
+        }
+
+        let match_reason = format!("Exact title match: '{} - {}'", artist1, title1);
+        let (file1_better, quality_difference) = self.determine_quality_difference(file1, file2);
+        
+        let (higher, lower) = if file1_better {
+            (file1.clone(), file2.clone())
+        } else {
+            (file2.clone(), file1.clone())
+        };
+
+        Some(DuplicateMatch {
+            higher_quality: higher,
+            lower_quality: lower,
+            match_reason,
+            quality_difference,
+        })
+    }
+
+    fn determine_quality_difference(
+        &self,
+        file1: &AudioFile,
+        file2: &AudioFile
+    ) -> (bool, String) {
+        // Compare bitrates first
+        match (file1.bitrate, file2.bitrate) {
+            (Some(b1), Some(b2)) if b1 != b2 => {
+                // Consider format differences (e.g., FLAC vs MP3)
+                let file1_better = if file1.file_name.ends_with(".flac") && !file2.file_name.ends_with(".flac") {
+                    true
+                } else if !file1.file_name.ends_with(".flac") && file2.file_name.ends_with(".flac") {
+                    false
+                } else {
+                    b1 > b2
+                };
+                return (file1_better, format!("Bitrate difference: {} vs {} kbps", b1, b2));
+            }
+            _ => {}
+        }
+
+        // If bitrates are same or unavailable, compare file sizes
+        if file1.size_bytes != file2.size_bytes {
+            let file1_better = file1.size_bytes > file2.size_bytes;
+            let size1_mb = file1.size_bytes as f64 / 1_048_576.0;
+            let size2_mb = file2.size_bytes as f64 / 1_048_576.0;
+            return (file1_better, format!("Size difference: {:.2} MB vs {:.2} MB", size1_mb, size2_mb));
+        }
+
+        // If everything is equal, keep the first one
+        (true, "Files are identical in size and bitrate".to_string())
+    }
+
+    pub fn find_duplicates(&self, files: Vec<AudioFile>) -> DuplicateResults {
+        println!("Starting duplicate analysis with {} files using {} threads", 
+            files.len(), 
+            rayon::current_num_threads()
+        );
+
+        if files.is_empty() {
+            println!("No files to analyze!");
+            return DuplicateResults { matches: Vec::new(), total_files_scanned: 0 };
+        }
+
+        let progress = Self::get_progress_counter();
+        let total_files = files.len();
+
+        // Use parallel comparison for finding duplicates
+        let matches = Self::parallel_compare(&files, |file1, file2| {
+            let result = self.are_duplicates(file1, file2);
+            
+            if result.is_some() {
+                let dup = result.as_ref().unwrap();
+                println!("\nFound duplicate:");
+                println!("  Higher quality: {} ({} kbps)", 
+                    dup.higher_quality.file_name, 
+                    dup.higher_quality.bitrate.unwrap_or(0));
+                println!("  Lower quality: {} ({} kbps)", 
+                    dup.lower_quality.file_name, 
+                    dup.lower_quality.bitrate.unwrap_or(0));
+                println!("  Reason: {}", dup.match_reason);
+                println!("  Quality difference: {}", dup.quality_difference);
+            }
+
+            let processed = progress.fetch_add(1, Ordering::SeqCst) + 1;
+            if processed % 1000 == 0 || processed == total_files {
+                println!("Progress: processed {} file comparisons", processed);
+            }
+
+            result
         });
 
-        let result = groups.into_inner().unwrap();
-        println!("Found {} groups of duplicates", result.len());
-        result
+        println!("\nFound {} duplicate matches", matches.len());
+        DuplicateResults {
+            matches,
+            total_files_scanned: total_files
+        }
     }
 }

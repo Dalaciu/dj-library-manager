@@ -34,5 +34,5 @@ pub type Result<T> = std::result::Result<T, AudioError>;
 
 // Re-exports for convenience
 pub use audio::metadata::MetadataExtractor;
-pub use analyzers::duplicate::{DuplicateAnalyzer, DuplicateGroup};
-pub use analyzers::bitrate::{BitrateAnalyzer, BitrateStats, BitrateCategory};
+pub use analyzers::duplicate::{DuplicateAnalyzer, DuplicateMatch, DuplicateResults};
+pub use analyzers::bitrate::{BitrateAnalyzer, BitrateStats};

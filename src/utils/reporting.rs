@@ -1,7 +1,7 @@
 use std::path::Path;
 use csv::Writer;
 use crate::analyzers::bitrate::{BitrateStats, BitrateCategory};
-use crate::analyzers::duplicate::DuplicateGroup;
+use crate::analyzers::duplicate::DuplicateResults;
 use crate::AudioFile;
 use crate::Result;
 
@@ -112,44 +112,34 @@ impl Reporter {
         Ok(())
     }
 
-    pub fn generate_duplicate_report(&self, groups: &[DuplicateGroup], output_path: impl AsRef<Path>) -> Result<()> {
+    pub fn generate_duplicate_report(&self, results: &DuplicateResults, output_path: impl AsRef<Path>) -> Result<()> {
         let output_path_ref = output_path.as_ref();
         let mut writer = Writer::from_path(output_path_ref)?;
         
         writer.write_record(&[
-            "Original File",
-            "Original Size (MB)",
-            "Original Bitrate",
-            "Duplicate Files",
-            "Duplicate Sizes (MB)",
-            "Duplicate Bitrates"
+            "Higher Quality File",
+            "Higher Quality Size (MB)",
+            "Higher Quality Bitrate",
+            "Lower Quality File",
+            "Lower Quality Size (MB)",
+            "Lower Quality Bitrate",
+            "Match Reason",
+            "Quality Difference"
         ])?;
 
-        for group in groups {
-            let duplicates = group.duplicates.iter()
-                .map(|f| f.file_name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-
-            let duplicate_sizes = group.duplicates.iter()
-                .map(|f| format!("{:.2}", f.size_bytes as f64 / 1_048_576.0))
-                .collect::<Vec<_>>()
-                .join(", ");
-
-            let duplicate_bitrates = group.duplicates.iter()
-                .map(|f| f.bitrate.map_or("Unknown".to_string(), |b| format!("{} kbps", b)))
-                .collect::<Vec<_>>()
-                .join(", ");
-
-            let original_size_mb = group.original.size_bytes as f64 / 1_048_576.0;
+        for dup_match in &results.matches {
+            let higher_size_mb = dup_match.higher_quality.size_bytes as f64 / 1_048_576.0;
+            let lower_size_mb = dup_match.lower_quality.size_bytes as f64 / 1_048_576.0;
 
             writer.write_record(&[
-                &group.original.file_name,
-                &format!("{:.2}", original_size_mb),
-                &group.original.bitrate.map_or("Unknown".to_string(), |b| format!("{} kbps", b)),
-                &duplicates,
-                &duplicate_sizes,
-                &duplicate_bitrates,
+                &dup_match.higher_quality.file_name,
+                &format!("{:.2}", higher_size_mb),
+                &dup_match.higher_quality.bitrate.map_or("Unknown".to_string(), |b| format!("{} kbps", b)),
+                &dup_match.lower_quality.file_name,
+                &format!("{:.2}", lower_size_mb),
+                &dup_match.lower_quality.bitrate.map_or("Unknown".to_string(), |b| format!("{} kbps", b)),
+                &dup_match.match_reason,
+                &dup_match.quality_difference,
             ])?;
         }
 

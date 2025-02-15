@@ -26,22 +26,19 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Duplicates { dirs, output, threshold, dry_run } => {
+        Commands::Duplicates { input, output, dry_run, recursive } => {
             println!("=== Starting Duplicate Analysis ===");
-            println!("Scanning directories for duplicates:");
-            for dir in &dirs {
-                println!("  - {}", dir.display());
-            }
+            println!("Input directory: {}", input.display());
             println!("Output directory: {}", output.display());
-            println!("Similarity threshold: {}", threshold);
             println!("Dry run mode: {}", dry_run);
+            println!("Recursive mode: {}", recursive);
             
             // Extract metadata from all audio files
             println!("\nScanning for audio files...");
-            let files = match MetadataExtractor::process_directories(&dirs) {
+            let files = match MetadataExtractor::process_directory(&input) {
                 Ok(files) => files,
                 Err(e) => {
-                    eprintln!("Error processing directories: {}", e);
+                    eprintln!("Error processing directory: {}", e);
                     return;
                 }
             };
@@ -55,24 +52,32 @@ fn main() {
 
             // Find duplicates
             println!("\nAnalyzing for duplicates...");
-            let analyzer = DuplicateAnalyzer::new(threshold);
-            let duplicate_groups = analyzer.find_duplicates(files);
+            let analyzer = DuplicateAnalyzer::new(0.0);
+            let results = analyzer.find_duplicates(files);
 
-            println!("\nFound {} groups of duplicates", duplicate_groups.len());
+            println!("\nFound {} duplicate matches in {} scanned files", 
+                results.matches.len(), 
+                results.total_files_scanned
+            );
 
-            if duplicate_groups.is_empty() {
+            if results.matches.is_empty() {
                 println!("No duplicates found.");
                 return;
             }
 
             if dry_run {
                 println!("\nDry run - no files will be moved");
-                println!("Would move the following duplicates:");
-                for group in &duplicate_groups {
-                    println!("\nOriginal: {}", group.original.file_name);
-                    for duplicate in &group.duplicates {
-                        println!("  Would move: {}", duplicate.file_name);
-                    }
+                println!("The following actions would be taken:");
+                for dup_match in &results.matches {
+                    println!("\nDuplicate pair found:");
+                    println!("  Will keep: {} ({} kbps)", 
+                        dup_match.higher_quality.file_name,
+                        dup_match.higher_quality.bitrate.unwrap_or(0));
+                    println!("  Would move: {} ({} kbps)", 
+                        dup_match.lower_quality.file_name,
+                        dup_match.lower_quality.bitrate.unwrap_or(0));
+                    println!("  Reason: {}", dup_match.match_reason);
+                    println!("  Quality difference: {}", dup_match.quality_difference);
                 }
             } else {
                 // Create output directory if it doesn't exist
@@ -82,16 +87,20 @@ fn main() {
                     .expect("Failed to create output directory");
 
                 // Move duplicates
-                println!("Moving duplicate files...");
-                for group in &duplicate_groups {
-                    println!("\nProcessing group with original: {}", group.original.file_name);
-                    for duplicate in &group.duplicates {
-                        match file_manager.move_duplicate(&duplicate.path) {
-                            Ok(new_path) => println!("  Moved: {} -> {}", 
-                                duplicate.file_name, 
-                                new_path.file_name().unwrap_or_default().to_string_lossy()),
-                            Err(e) => eprintln!("  Error moving duplicate {}: {}", duplicate.file_name, e),
-                        }
+                println!("\nMoving duplicate files...");
+                for dup_match in &results.matches {
+                    println!("\nProcessing duplicate pair:");
+                    println!("  Keeping: {} ({} kbps)", 
+                        dup_match.higher_quality.file_name,
+                        dup_match.higher_quality.bitrate.unwrap_or(0));
+                    
+                    match file_manager.move_duplicate(&dup_match.lower_quality.path) {
+                        Ok(new_path) => println!("  Moved: {} ({} kbps) -> {}", 
+                            dup_match.lower_quality.file_name,
+                            dup_match.lower_quality.bitrate.unwrap_or(0),
+                            new_path.file_name().unwrap_or_default().to_string_lossy()),
+                        Err(e) => eprintln!("  Error moving file {}: {}", 
+                            dup_match.lower_quality.file_name, e),
                     }
                 }
             }
@@ -100,7 +109,7 @@ fn main() {
             println!("\nGenerating report...");
             let reporter = Reporter::new();
             let report_path = output.join("duplicate_report.csv");
-            match reporter.generate_duplicate_report(&duplicate_groups, &report_path) {
+            match reporter.generate_duplicate_report(&results, &report_path) {
                 Ok(_) => println!("Report saved to: {}", report_path.display()),
                 Err(e) => eprintln!("Error generating report: {}", e),
             }
@@ -109,13 +118,12 @@ fn main() {
         }
 
         Commands::Bitrate { dir, output } => {
+            // Bitrate command implementation remains unchanged
             println!("=== Starting Bitrate Analysis ===");
             println!("Analyzing bitrates in directory: {}", dir.display());
             
-            // Convert single dir to Vec for consistency
             let dirs = vec![dir];
             
-            // Extract metadata from all audio files
             println!("\nScanning for audio files...");
             let files = match MetadataExtractor::process_directories(&dirs) {
                 Ok(files) => files,
@@ -132,12 +140,10 @@ fn main() {
                 return;
             }
 
-            // Analyze bitrates
             println!("\nAnalyzing bitrates...");
             let analyzer = BitrateAnalyzer::new();
             let stats = analyzer.analyze(&files);
 
-            // Generate reports
             println!("\nGenerating reports...");
             let reporter = Reporter::new();
             match reporter.generate_bitrate_report(&stats, &files, &output) {

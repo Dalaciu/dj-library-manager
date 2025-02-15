@@ -15,21 +15,21 @@ pub struct Cli {
 pub enum Commands {
     /// Find and manage duplicate audio files
     Duplicates {
-        /// Directories to scan for duplicates (can specify multiple)
-        #[arg(short = 'i', long = "dir", num_args = 1.., value_delimiter = ',')]
-        dirs: Vec<PathBuf>,
+        /// Directory to scan for duplicates
+        #[arg(short = 'i', long = "input")]
+        input: PathBuf,
 
         /// Directory to move duplicates to
-        #[arg(short = 'o', long)]
+        #[arg(short = 'o', long = "output")]
         output: PathBuf,
-
-        /// Similarity threshold (0.0 - 1.0, default: 0.8)
-        #[arg(short = 't', long, default_value_t = 0.8)]
-        threshold: f64,
 
         /// Only detect duplicates without moving files
         #[arg(short = 'd', long)]
         dry_run: bool,
+
+        /// Recursively scan subdirectories
+        #[arg(short = 'r', long, default_value_t = true)]
+        recursive: bool,
     },
 
     /// Analyze audio files bitrates
