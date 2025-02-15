@@ -137,12 +137,12 @@ fn main() {
             let analyzer = BitrateAnalyzer::new();
             let stats = analyzer.analyze(&files);
 
-            // Generate report
-            println!("\nGenerating report...");
+            // Generate reports
+            println!("\nGenerating reports...");
             let reporter = Reporter::new();
-            match reporter.generate_bitrate_report(&stats, &output) {
-                Ok(_) => println!("Report saved to: {}", output.display()),
-                Err(e) => eprintln!("Error generating report: {}", e),
+            match reporter.generate_bitrate_report(&stats, &files, &output) {
+                Ok(_) => println!("Reports generated successfully."),
+                Err(e) => eprintln!("Error generating reports: {}", e),
             }
 
             println!("\n=== Bitrate Analysis Complete ===");

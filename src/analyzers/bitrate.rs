@@ -15,7 +15,7 @@ pub enum BitrateCategory {
 }
 
 impl BitrateCategory {
-    fn from_bitrate(bitrate: u32) -> Self {
+    pub fn from_bitrate(bitrate: u32) -> Self {
         match bitrate {
             1500.. => BitrateCategory::HighRes,
             700..=1499 => BitrateCategory::Lossless,
@@ -113,11 +113,13 @@ impl BitrateAnalyzer {
         println!("Max bitrate: {} kbps", stats.max_bitrate);
         println!("\nBitrate Distribution:");
         
-        // Calculate total for percentage
+        // Calculate total for percentage and sort categories
         let total_processed = stats.category_distribution.values().sum::<usize>();
+        let mut categories: Vec<_> = stats.category_distribution.iter().collect();
+        categories.sort_by(|a, b| b.0.cmp(a.0));  // Sort from highest to lowest quality
         
-        for (category, count) in &stats.category_distribution {
-            let percentage = ((*count as f64 / total_processed as f64) * 100.0).round();
+        for (category, count) in &categories {
+            let percentage = (**count as f64 / total_processed as f64 * 100.0).round();
             println!("{}: {} files ({:.1}%)", category.as_str(), count, percentage);
         }
 
