@@ -1,6 +1,6 @@
 # DJ Library Manager
 
-A high-performance DJ music library management tool written in Rust that helps you organize, analyze and deduplicate your music collection. Perfect for DJs managing large music collections across different formats and versions.
+Driven by a personal need, I created a high-performance DJ music library management tool written in Rust that helps you organize, analyze and deduplicate your music collection. Perfect for DJs managing large music collections across different formats and versions.
 
 ## Features
 
