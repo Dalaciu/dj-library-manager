@@ -1,5 +1,5 @@
 use clap::Parser;
-use bitrate_analyzer::{
+use dj_library_manager::{
     MetadataExtractor,
     analyzers::{
         bitrate::BitrateAnalyzer,
@@ -10,7 +10,7 @@ use bitrate_analyzer::{
         reporting::Reporter,
     },
 };
-use bitrate_analyzer::cli::commands::{Cli, Commands};
+use dj_library_manager::cli::commands::{Cli, Commands};
 
 fn main() {
     env_logger::init();
@@ -26,12 +26,11 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Duplicates { input, output, dry_run, recursive } => {
+        Commands::Duplicates { input, output, dry_run } => {
             println!("=== Starting Duplicate Analysis ===");
             println!("Input directory: {}", input.display());
             println!("Output directory: {}", output.display());
             println!("Dry run mode: {}", dry_run);
-            println!("Recursive mode: {}", recursive);
             
             // Extract metadata from all audio files
             println!("\nScanning for audio files...");
@@ -117,12 +116,12 @@ fn main() {
             println!("\n=== Duplicate Analysis Complete ===");
         }
 
-        Commands::Bitrate { dir, output } => {
+        Commands::Bitrate { input, output } => {
             // Bitrate command implementation remains unchanged
             println!("=== Starting Bitrate Analysis ===");
-            println!("Analyzing bitrates in directory: {}", dir.display());
+            println!("Analyzing bitrates in directory: {}", input.display());
             
-            let dirs = vec![dir];
+            let dirs = vec![input];
             
             println!("\nScanning for audio files...");
             let files = match MetadataExtractor::process_directories(&dirs) {

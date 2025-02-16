@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use crate::AudioFile;
+use crate::utils::parallel::ParallelProcessor;
 use serde::Serialize;
 use std::fmt;
 use rayon::prelude::*;
@@ -55,10 +56,34 @@ pub struct BitrateStats {
 
 pub struct BitrateAnalyzer;
 
+impl ParallelProcessor for BitrateAnalyzer {}
+
 impl BitrateAnalyzer {
     pub fn new() -> Self {
         println!("Initializing BitrateAnalyzer");
         Self
+    }
+
+    // Reusable quality comparison function
+    pub fn compare_quality(file1: &AudioFile, file2: &AudioFile) -> (bool, String) {
+        match (file1.bitrate, file2.bitrate) {
+            (Some(b1), Some(b2)) if b1 != b2 => {
+                let file1_better = match (file1.file_name.ends_with(".flac"), 
+                                        file2.file_name.ends_with(".flac")) {
+                    (true, false) => true,
+                    (false, true) => false,
+                    _ => b1 > b2,
+                };
+                (file1_better, format!("Bitrate difference: {} vs {} kbps", b1, b2))
+            },
+            _ if file1.size_bytes != file2.size_bytes => {
+                let file1_better = file1.size_bytes > file2.size_bytes;
+                let size1_mb = file1.size_bytes as f64 / 1_048_576.0;
+                let size2_mb = file2.size_bytes as f64 / 1_048_576.0;
+                (file1_better, format!("Size difference: {:.2} MB vs {:.2} MB", size1_mb, size2_mb))
+            },
+            _ => (true, "Files are identical in size and bitrate".to_string())
+        }
     }
 
     pub fn analyze(&self, files: &[AudioFile]) -> BitrateStats {
@@ -67,37 +92,48 @@ impl BitrateAnalyzer {
             rayon::current_num_threads()
         );
         
-        let mut category_distribution: HashMap<BitrateCategory, usize> = HashMap::new();
-        let mut total_bitrate = 0.0;
-        let mut min_bitrate = u32::MAX;
-        let mut max_bitrate = 0;
-        let mut valid_bitrate_count = 0;
+        let progress = Self::get_progress_counter();
+        let total_files = files.len();
 
         // Process files in parallel
         let results: Vec<_> = files.par_iter()
             .filter_map(|file| file.bitrate.map(|b| (file, b)))
+            .inspect(|(file, bitrate)| {
+                let processed = progress.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                if processed % 100 == 0 || processed == total_files {
+                    println!("Progress: {}/{} files ({:.1}%)", 
+                        processed, total_files,
+                        (processed as f64 / total_files as f64) * 100.0
+                    );
+                }
+                
+                println!("Processed '{}' - {} kbps ({})", 
+                    file.file_name, 
+                    bitrate,
+                    BitrateCategory::from_bitrate(*bitrate).as_str()
+                );
+            })
             .collect();
 
-        for (file, bitrate) in results {
-            let category = BitrateCategory::from_bitrate(bitrate);
+        // Calculate statistics
+        let mut category_distribution: HashMap<BitrateCategory, usize> = HashMap::new();
+        let mut total_bitrate = 0.0;
+        let mut min_bitrate = u32::MAX;
+        let mut max_bitrate = 0;
+
+        for (_, bitrate) in &results {
+            let category = BitrateCategory::from_bitrate(*bitrate);
             *category_distribution.entry(category).or_insert(0) += 1;
-            total_bitrate += bitrate as f64;
-            min_bitrate = min_bitrate.min(bitrate);
-            max_bitrate = max_bitrate.max(bitrate);
-            valid_bitrate_count += 1;
-            
-            println!("Processed '{}' - {} kbps ({})", 
-                file.file_name, 
-                bitrate,
-                BitrateCategory::from_bitrate(bitrate).as_str()
-            );
+            total_bitrate += *bitrate as f64;
+            min_bitrate = min_bitrate.min(*bitrate);
+            max_bitrate = max_bitrate.max(*bitrate);
         }
 
         let stats = BitrateStats {
             file_count: files.len(),
             category_distribution,
-            average_bitrate: if valid_bitrate_count > 0 {
-                total_bitrate / valid_bitrate_count as f64
+            average_bitrate: if !results.is_empty() {
+                total_bitrate / results.len() as f64
             } else {
                 0.0
             },
@@ -105,24 +141,26 @@ impl BitrateAnalyzer {
             max_bitrate,
         };
 
+        Self::print_summary(&stats);
+        stats
+    }
+
+    fn print_summary(stats: &BitrateStats) {
         println!("\nBitrate Analysis Summary:");
         println!("Total files: {}", stats.file_count);
-        println!("Files with valid bitrate: {}", valid_bitrate_count);
+        println!("Files with valid bitrate: {}", stats.category_distribution.values().sum::<usize>());
         println!("Average bitrate: {:.1} kbps", stats.average_bitrate);
         println!("Min bitrate: {} kbps", stats.min_bitrate);
         println!("Max bitrate: {} kbps", stats.max_bitrate);
         println!("\nBitrate Distribution:");
         
-        // Calculate total for percentage and sort categories
         let total_processed = stats.category_distribution.values().sum::<usize>();
         let mut categories: Vec<_> = stats.category_distribution.iter().collect();
-        categories.sort_by(|a, b| b.0.cmp(a.0));  // Sort from highest to lowest quality
+        categories.sort_by(|a, b| b.0.cmp(a.0));
         
         for (category, count) in &categories {
             let percentage = (**count as f64 / total_processed as f64 * 100.0).round();
             println!("{}: {} files ({:.1}%)", category.as_str(), count, percentage);
         }
-
-        stats
     }
 }

@@ -1,5 +1,6 @@
 use crate::AudioFile;
 use crate::utils::parallel::ParallelProcessor;
+use crate::analyzers::bitrate::BitrateAnalyzer;
 use std::sync::atomic::Ordering;
 use regex::Regex;
 use std::sync::Arc;
@@ -26,9 +27,25 @@ enum VersionType {
 
 impl VersionType {
     fn from_str(text: Option<&str>) -> Self {
-        let markers = ["remix", "mix", "edit", "version", "extended",
-                      "radio", "club", "dub", "instrumental", "remaster",
-                      "bootleg", "mashup", "flip", "recut", "reprise"];
+        let markers = [
+            // Remix and edit types
+            "remix", "mix", "rmx", "rework", "edit", "reconstruction",
+            "bootleg", "mashup", "flip", "recut", "reprise",
+            // Version types
+            "version", "radio", "club", "special", "extended",
+            // DJ markers
+            "dj", "vs", "presents", 
+            // Release types
+            "remaster", "master", "remastered",
+            // Mix types
+            "dub", "instrumental", "acapella", "acoustic", "live",
+            // Length markers
+            "long", "short", "full", "cut", "original",
+            // Regional markers
+            "us", "uk", "euro", "italian", "spanish", "dutch",
+            // Special combinations
+            "radio edit", "club mix", "dance mix", "extended mix"
+        ];
 
         match text {
             None => Self::None,
@@ -61,6 +78,7 @@ impl VersionType {
     }
 }
 
+#[derive(Debug)]
 struct ParsedTitle {
     artist: String,
     title: String,
@@ -93,7 +111,9 @@ impl DuplicateAnalyzer {
             .split(',')
             .map(|s| {
                 let artist_name = s.trim();
-                artist_name.split('(')
+                // Remove any parenthetical content from artist names
+                artist_name
+                    .split('(')
                     .next()
                     .unwrap_or(artist_name)
                     .trim()
@@ -183,8 +203,9 @@ impl DuplicateAnalyzer {
             return None;
         }
 
+        // Use BitrateAnalyzer for quality comparison
+        let (file1_better, quality_difference) = BitrateAnalyzer::compare_quality(file1, file2);
         let match_reason = self.get_formatted_reason(&parsed1, parsed1.version.as_deref());
-        let (file1_better, quality_difference) = self.determine_quality_difference(file1, file2);
         
         let (higher, lower) = if file1_better {
             (file1.clone(), file2.clone())
@@ -200,28 +221,6 @@ impl DuplicateAnalyzer {
         })
     }
 
-    fn determine_quality_difference(&self, file1: &AudioFile, file2: &AudioFile) -> (bool, String) {
-        match (file1.bitrate, file2.bitrate) {
-            (Some(b1), Some(b2)) if b1 != b2 => {
-                let file1_better = match (file1.file_name.ends_with(".flac"), 
-                                        file2.file_name.ends_with(".flac")) {
-                    (true, false) => true,
-                    (false, true) => false,
-                    _ => b1 > b2,
-                };
-                (file1_better, format!("Bitrate difference: {} vs {} kbps", b1, b2))
-            },
-            _ if file1.size_bytes != file2.size_bytes => {
-                let file1_better = file1.size_bytes > file2.size_bytes;
-                let size1_mb = file1.size_bytes as f64 / 1_048_576.0;
-                let size2_mb = file2.size_bytes as f64 / 1_048_576.0;
-                (file1_better, format!("Size difference: {:.2} MB vs {:.2} MB", size1_mb, size2_mb))
-            },
-            _ => (true, "Files are identical in size and bitrate".to_string())
-        }
-    }
-
-    // find_duplicates implementation remains the same
     pub fn find_duplicates(&self, files: Vec<AudioFile>) -> DuplicateResults {
         println!("Starting duplicate analysis with {} files using {} threads", 
             files.len(), 
@@ -236,6 +235,7 @@ impl DuplicateAnalyzer {
         let progress = Self::get_progress_counter();
         let total_files = files.len();
 
+        // Use parallel comparison for finding duplicates
         let matches = Self::parallel_compare(&files, |file1, file2| {
             let result = self.are_duplicates(file1, file2);
             

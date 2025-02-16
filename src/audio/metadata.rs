@@ -4,9 +4,12 @@ use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 use crate::{AudioFile, Result, AudioError};
+use crate::utils::parallel::ParallelProcessor;
 use rayon::prelude::*;
 
 pub struct MetadataExtractor;
+
+impl ParallelProcessor for MetadataExtractor {}
 
 impl MetadataExtractor {
     pub fn extract_metadata(path: impl AsRef<Path>) -> Result<AudioFile> {
@@ -87,17 +90,37 @@ impl MetadataExtractor {
             }
         }
 
-        println!("Processed file: {} (Size: {} bytes, Duration: {:?}s, Bitrate: {:?}kbps)",
-            audio_file.file_name,
-            audio_file.size_bytes,
-            audio_file.duration_secs,
-            audio_file.bitrate
-        );
-
         Ok(audio_file)
     }
 
+    fn collect_audio_files(dir_path: &Path) -> Vec<walkdir::DirEntry> {
+        walkdir::WalkDir::new(dir_path)
+            .follow_links(true)
+            .into_iter()
+            .filter_map(|e| match e {
+                Ok(entry) => Some(entry),
+                Err(err) => {
+                    eprintln!("Error accessing entry: {}", err);
+                    None
+                }
+            })
+            .filter(|e| {
+                let is_file = e.file_type().is_file();
+                let has_valid_ext = if let Some(ext) = e.path().extension().and_then(|e| e.to_str()) {
+                    matches!(ext.to_lowercase().as_str(), "mp3" | "wav" | "flac")
+                } else {
+                    false
+                };
+                if is_file && !has_valid_ext {
+                    println!("Skipping non-audio file: {}", e.path().display());
+                }
+                is_file && has_valid_ext
+            })
+            .collect()
+    }
+
     pub fn process_directories(dirs: &[impl AsRef<Path>]) -> Result<Vec<AudioFile>> {
+        Self::init_parallel_processing();
         let mut all_files = Vec::new();
         
         for dir in dirs {
@@ -120,62 +143,47 @@ impl MetadataExtractor {
         } else {
             dir_ref.to_path_buf()
         };
+
         println!("Scanning directory structure: {}", dir_path.display());
 
-        // First, scan for subdirectories
-        let subdirs: Vec<_> = walkdir::WalkDir::new(&dir_path)
-            .min_depth(1)  // Skip the root dir itself
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().is_dir())
-            .collect();
+        // Collect all potential audio files
+        let entries = Self::collect_audio_files(&dir_path);
+        println!("Found {} potential audio files", entries.len());
 
-        if !subdirs.is_empty() {
-            println!("Found {} subdirectories:", subdirs.len());
-            for subdir in &subdirs {
-                println!("  - {}", subdir.path().display());
-            }
-        } else {
-            println!("No subdirectories found, processing single directory");
+        if entries.is_empty() {
+            return Ok(Vec::new());
         }
 
-        // Now process all files in parallel
-        println!("Collecting audio files...");
-        let entries: Vec<_> = walkdir::WalkDir::new(&dir_path)
-            .follow_links(true)
-            .into_iter()
-            .filter_map(|e| match e {
-                Ok(entry) => Some(entry),
-                Err(err) => {
-                    eprintln!("Error accessing entry: {}", err);
-                    None
-                }
-            })
-            .filter(|e| {
-                let is_file = e.file_type().is_file();
-                let has_valid_ext = if let Some(ext) = e.path().extension().and_then(|e| e.to_str()) {
-                    matches!(ext.to_lowercase().as_str(), "mp3" | "wav" | "flac")
-                } else {
-                    false
-                };
-                if is_file && !has_valid_ext {
-                    println!("Skipping non-audio file: {}", e.path().display());
-                }
-                is_file && has_valid_ext
-            })
-            .collect();
-
-        println!("Found {} potential audio files", entries.len());
+        let progress = Self::get_progress_counter();
+        let total_files = entries.len();
 
         // Process files in parallel using rayon
         println!("Processing files using {} threads...", rayon::current_num_threads());
-        let results: Vec<Result<AudioFile>> = entries.par_iter()
-            .map(|entry| Self::extract_metadata(entry.path()))
-            .collect();
+        let files: Vec<AudioFile> = entries.par_iter()
+            .map(|entry| {
+                let result = Self::extract_metadata(entry.path());
+                
+                if let Ok(ref file) = result {
+                    println!("Processed file: {} (Size: {} bytes, Duration: {:?}s, Bitrate: {:?}kbps)",
+                        file.file_name,
+                        file.size_bytes,
+                        file.duration_secs,
+                        file.bitrate
+                    );
+                }
 
-        // Filter out errors and collect successful results
-        let files: Vec<AudioFile> = results.into_iter()
-            .filter_map(|r| match r {
+                let processed = progress.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                if processed % 100 == 0 || processed == total_files {
+                    println!("Progress: {}/{} files ({:.1}%)", 
+                        processed,
+                        total_files,
+                        (processed as f64 / total_files as f64) * 100.0
+                    );
+                }
+
+                result
+            })
+            .filter_map(|result| match result {
                 Ok(file) => Some(file),
                 Err(e) => {
                     eprintln!("Error processing file: {}", e);
