@@ -22,10 +22,7 @@ This project was driven by my own need. If you like to keep your music library c
 ## Installation
 
 ```bash
-# Using cargo
-cargo install dj-library-manager
-
-# Or build from source
+# Build from source
 git clone https://github.com/yourusername/dj-library-manager
 cd dj-library-manager
 cargo build --release
