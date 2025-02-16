@@ -33,6 +33,56 @@ impl DuplicateAnalyzer {
         }
     }
 
+    fn normalize_artist(artist: &str) -> String {
+        // First clean up common variations and make lowercase
+        let normalized = artist
+            .to_lowercase()
+            .replace("feat.", "featuring")
+            .replace("ft.", "featuring")
+            .replace(" x ", " featuring ");
+    
+        // Split artists, then clean each one
+        let mut artists: Vec<_> = normalized
+            .split(',')
+            .map(|s| {
+                let artist_name = s.trim();
+                // Remove parenthetical info after splitting
+                if let Some(paren_start) = artist_name.find('(') {
+                    artist_name[..paren_start].trim()
+                } else {
+                    artist_name
+                }
+            })
+            .collect();
+    
+        // Sort for consistent ordering
+        artists.sort();
+        artists.join(", ")
+    }
+
+    fn is_version_marker(text: &str) -> bool {
+        // Core version markers - simplifying to most common ones
+        let version_markers = [
+            "remix", "mix", "edit", "version", "extended",
+            "radio", "club", "dub", "instrumental", "remaster",
+            "bootleg", "mashup", "flip", "recut", "reprise"
+        ];
+
+        let text_lower = text.to_lowercase();
+        
+        // If it contains any version marker word, treat it as a version
+        for marker in version_markers {
+            if text_lower.contains(marker) {
+                return true;
+            }
+        }
+
+        // Check for year markers (e.g., 2017, 2010)
+        text_lower.chars()
+            .filter(|c| c.is_ascii_digit())
+            .count() >= 4
+    }
+
     fn clean_title(&self, filename: &str) -> (String, Option<String>, Option<String>) {
         // Remove file extension
         let without_ext = filename.rfind('.').map_or(filename, |i| &filename[..i]);
@@ -53,23 +103,83 @@ impl DuplicateAnalyzer {
             return (without_numbers, None, None);
         }
 
-        let artist = parts[0].trim().to_lowercase();
-        let mut title_parts = parts[1..].join(" - ");
+        let artist = Self::normalize_artist(parts[0].trim());
+        let title_parts = parts[1..].join(" - ");
 
         // Extract version info in parentheses
-        let version = if let Some(paren_start) = title_parts.rfind('(') {
+        let (clean_title, version) = if let Some(paren_start) = title_parts.rfind('(') {
             if let Some(paren_end) = title_parts[paren_start..].find(')') {
-                let version = title_parts[paren_start + 1..paren_start + paren_end].trim().to_lowercase();
-                title_parts = title_parts[..paren_start].trim().to_string();
-                Some(version)
+                let version_text = title_parts[paren_start + 1..paren_start + paren_end].trim();
+                
+                // Only treat it as a version if it contains version markers
+                if Self::is_version_marker(version_text) {
+                    (
+                        title_parts[..paren_start].trim().to_string(),
+                        Some(version_text.to_lowercase())
+                    )
+                } else {
+                    // Keep parenthetical text as part of the title if it's not a version
+                    (title_parts.trim().to_string(), None)
+                }
             } else {
-                None
+                (title_parts.trim().to_string(), None)
             }
         } else {
-            None
+            (title_parts.trim().to_string(), None)
         };
 
-        (artist, Some(title_parts.trim().to_lowercase()), version)
+        (artist, Some(clean_title.to_lowercase()), version)
+    }
+
+    fn are_different_versions(version1: Option<&str>, version2: Option<&str>) -> bool {
+        match (version1, version2) {
+            (Some(v1), Some(v2)) => {
+                let contains_marker1 = Self::is_version_marker(v1);
+                let contains_marker2 = Self::is_version_marker(v2);
+                
+                // If both are versions and share core version type, treat as same version
+                if contains_marker1 && contains_marker2 {
+                    let v1_lower = v1.to_lowercase();
+                    let v2_lower = v2.to_lowercase();
+                    
+                    // Extract core version types (extended, remix, etc)
+                    let core_markers = ["extended", "remix", "mix", "edit", "version"];
+                    let v1_types: Vec<_> = core_markers.iter()
+                        .filter(|&&marker| v1_lower.contains(marker))
+                        .collect();
+                    let v2_types: Vec<_> = core_markers.iter()
+                        .filter(|&&marker| v2_lower.contains(marker))
+                        .collect();
+                    
+                    // If they share any core version type, they're the same version
+                    for v1_type in &v1_types {
+                        if v2_types.contains(v1_type) {
+                            return false;
+                        }
+                    }
+                }
+                
+                // Otherwise treat as different versions
+                true
+            },
+            (Some(v), None) | (None, Some(v)) => Self::is_version_marker(v),
+            _ => false,
+        }
+    }
+
+    fn get_formatted_reason(&self, artist: &str, title: &str, version1: Option<&str>, version2: Option<&str>) -> String {
+        let version_info = if version1 == version2 {
+            version1.map_or(String::new(), |v| format!(" ({})", v))
+        } else {
+            match (version1, version2) {
+                (Some(v1), Some(_)) => format!(" ({})", v1),
+                (Some(v1), None) => format!(" ({})", v1),
+                (None, Some(v2)) => format!(" ({})", v2),
+                _ => String::new()
+            }
+        };
+
+        format!("Exact title match: '{} - {}{}'", artist, title, version_info)
     }
 
     fn are_duplicates(&self, file1: &AudioFile, file2: &AudioFile) -> Option<DuplicateMatch> {
@@ -91,28 +201,12 @@ impl DuplicateAnalyzer {
             return None;
         }
 
-        // Different versions are not duplicates
-        match (version1, version2) {
-            (Some(v1), Some(v2)) if v1 != v2 => {
-                // Check for significant version differences
-                let version_keywords = [
-                    "remix", "edit", "version", "mix", "remaster", 
-                    "extended", "radio", "club", "instrumental", "dub",
-                    "original", "rework", "reconstruction", "vip", "bootleg",
-                    "mashup", "flip", "cut", "recut", "reprise"
-                ];
-
-                // If either version contains any of these keywords, they're different versions
-                for keyword in version_keywords {
-                    if (v1.contains(keyword) || v2.contains(keyword)) && v1 != v2 {
-                        return None;
-                    }
-                }
-            }
-            _ => {}
+        // Check for different versions
+        if Self::are_different_versions(version1.as_deref(), version2.as_deref()) {
+            return None;
         }
 
-        let match_reason = format!("Exact title match: '{} - {}'", artist1, title1);
+        let match_reason = self.get_formatted_reason(&artist1, &title1, version1.as_deref(), version2.as_deref());
         let (file1_better, quality_difference) = self.determine_quality_difference(file1, file2);
         
         let (higher, lower) = if file1_better {
