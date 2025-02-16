@@ -5,6 +5,7 @@ A high-performance DJ music library management tool written in Rust that helps y
 ## Features
 
 ### 1. Duplicate Detection
+
 - Intelligent duplicate detection specifically designed for DJ music libraries
 - Smart version detection for DJ-specific formats (Radio Edits, Club Mixes, Extended Versions)
 - Quality-aware selection (keeps the highest quality version)
@@ -12,6 +13,7 @@ A high-performance DJ music library management tool written in Rust that helps y
 - Supports FLAC, MP3, and WAV formats
 
 ### 2. Bitrate Analysis
+
 - Complete bitrate analysis of your DJ library
 - Categorization into quality tiers (High-Res, Lossless, High, Standard, Low)
 - Detailed CSV reports with comprehensive file information
@@ -32,6 +34,7 @@ cargo build --release
 ## Usage
 
 ### Duplicate Detection
+
 ```bash
 dj-library-manager duplicates --input <INPUT_DIR> --output <OUTPUT_DIR> [--dry-run]
 
@@ -42,6 +45,7 @@ Options:
 ```
 
 ### Bitrate Analysis
+
 ```bash
 dj-library-manager bitrate --input <INPUT_DIR> --output <OUTPUT_FILE>
 
@@ -55,12 +59,14 @@ Options:
 ### Duplicate Detection Algorithm
 
 1. **DJ-Specific Title Parsing**
+
    - Splits filenames into artist, title, and version components
    - Handles various artist collaboration formats (feat., ft., x)
    - Normalizes and sorts artist names for consistent matching
    - Special handling for DJ aliases and remixer names
 
 2. **Version Detection**
+
    - Identifies common DJ formats (Club Mix, Radio Edit, Extended Mix)
    - Smart handling of remixer names and DJ edits
    - Version comparison considering DJ-specific patterns
@@ -74,6 +80,7 @@ Options:
 ### Bitrate Analysis
 
 1. **Quality Categories**
+
    - High-Resolution: 1500+ kbps (Perfect for large venue sound systems)
    - Lossless: 700-1499 kbps (Ideal for professional DJ use)
    - High Quality: 256-400 kbps (Suitable for most DJ setups)
@@ -95,6 +102,7 @@ Options:
 ## Example Output
 
 ### Duplicate Detection
+
 ```
 Found duplicate:
   Higher quality: track.flac (1411 kbps)
@@ -104,6 +112,7 @@ Found duplicate:
 ```
 
 ### Bitrate Analysis
+
 ```
 Bitrate Analysis Summary:
 Total files: 1000
@@ -125,7 +134,7 @@ Contributions are welcome! Please feel free to submit a Pull Request. For major 
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE.md) file for details.
 
 ## Acknowledgments
 
