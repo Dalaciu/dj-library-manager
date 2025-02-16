@@ -27,26 +27,40 @@ impl FileManager {
         let destination = self.duplicate_dir.join(file_name);
         
         // Handle case where file already exists in destination
-        if destination.exists() {
+        let final_destination = if destination.exists() {
             let mut counter = 1;
             let file_stem = file_name.to_str().unwrap_or("duplicate");
             let extension = file_path.extension()
                 .and_then(|ext| ext.to_str())
                 .unwrap_or("");
                 
-            while self.duplicate_dir
-                .join(format!("{}_{}_{}.{}", file_stem, "duplicate", counter, extension))
-                .exists() {
+            loop {
+                let new_name = format!("{}_{}_{}.{}", file_stem, "duplicate", counter, extension);
+                let new_path = self.duplicate_dir.join(new_name);
+                if !new_path.exists() {
+                    break new_path;
+                }
                 counter += 1;
             }
-            
-            let new_name = format!("{}_{}_{}.{}", file_stem, "duplicate", counter, extension);
-            let destination = self.duplicate_dir.join(new_name);
-            fs::rename(file_path, &destination)?;
-            Ok(destination)
         } else {
-            fs::rename(file_path, &destination)?;
-            Ok(destination)
+            destination
+        };
+
+        // Try to move the file first
+        match fs::rename(file_path, &final_destination) {
+            Ok(_) => Ok(final_destination),
+            Err(e) => {
+                // Check if error is about cross-device move
+                if e.to_string().contains("cannot move") || 
+                   e.to_string().contains("different disk drive") {
+                    // Fall back to copy + delete
+                    fs::copy(file_path, &final_destination)?;
+                    fs::remove_file(file_path)?;
+                    Ok(final_destination)
+                } else {
+                    Err(e.into())
+                }
+            }
         }
     }
 

@@ -1,2 +1,48 @@
+# Rust build artifacts
 /target/
+**/*.rs.bk
 Cargo.lock
+
+# IDE - VSCode
+.vscode/
+*.code-workspace
+.history/
+
+# IDE - IntelliJ
+.idea/
+*.iml
+*.iws
+
+# IDE - RustRover
+.rustover/
+
+# Program outputs
+*.csv
+/reports/
+/duplicates/
+
+# Debug logs
+debug/
+*.log
+
+# macOS system files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+
+# Windows system files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Environment files
+.env
+.env.local
+*.env
+
+# Backup files
+*.bak
+*.backup
+*~
